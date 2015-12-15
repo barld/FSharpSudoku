@@ -58,66 +58,96 @@ let rec notPosibleElseWhere x (cells: sudokuCell list) : bool =
         | Options ops -> if ops |> List.forall (fun n -> x <> n) then notPosibleElseWhere x tail else false
         | _ -> notPosibleElseWhere x tail
 
+type pos = {x:int;y:int}
+let getSudokuBoxes (sudoku: sudokuGrid) =
+    sudoku |> List.groupBy (fun c -> {x=c.x/3; y=c.y/3} )
+
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 //solve functions
-let solveCellHorizontal (cell:sudokuCell) (sudoku:sudokuGrid) :sudokuCell =
+let solveCellRange (cell:sudokuCell) (sudoku:sudokuGrid) (range: sudokuCell list) :sudokuCell =
     match cell.Value with
     | Resolved _ -> cell
     | Options list ->         
-        let rowOfCell = getRowOfCell cell sudoku
-        let newList = list |> List.filter (fun x -> not (isRangeSolvedWith x rowOfCell))
+        let newList = list |> List.filter (fun x -> not (isRangeSolvedWith x range))
         if newList |> List.length = 1 then
             {cell with Value = Resolved (newList |> List.head)}
         else
-            match newList |> List.tryFind (fun x -> notPosibleElseWhere x rowOfCell) with
+            match newList |> List.tryFind (fun x -> notPosibleElseWhere x range) with
             | Some v -> {cell with Value = Resolved v}
             | _ -> {cell with Value = Options newList}
 
+//solve functions
+let solveCellHorizontal (cell:sudokuCell) (sudoku:sudokuGrid) :sudokuCell =
+    solveCellRange cell sudoku (getRowOfCell cell sudoku)
+
 let solveCellVertical (cell:sudokuCell) (sudoku:sudokuGrid) :sudokuCell =
-    match cell.Value with
-    | Resolved _ -> cell
-    | Options list ->
-        let columnOfCell = getColumnOfCell cell sudoku
-        let newList = list |> List.filter (fun x -> not (isRangeSolvedWith x columnOfCell))
-        if newList |> List.length = 1 then
-            {cell with Value = Resolved (newList |> List.head)}
-        else
-            match newList |> List.tryFind (fun x -> notPosibleElseWhere x columnOfCell) with
-            | Some v -> {cell with Value = Resolved v}
-            | _ -> {cell with Value = Options newList}
+     solveCellRange cell sudoku (getColumnOfCell cell sudoku)
 
 //a sudokubox is a 3x3 grid in the sudoku
 let solveCellSudokuBox (cell:sudokuCell) (sudoku:sudokuGrid) :sudokuCell =
-    match cell.Value with
-    | Resolved _ -> cell
-    | Options list ->
-        let boxOfCell = getSudkoBoxOfCell cell sudoku
-        let newList = list |> List.filter (fun x -> not (isRangeSolvedWith x boxOfCell))
-        if newList |> List.length = 1 then
-            {cell with Value = Resolved (newList |> List.head)}
-        else
-            match newList |> List.tryFind (fun x -> notPosibleElseWhere x boxOfCell) with
-            | Some v -> {cell with Value = Resolved v}
-            | _ -> {cell with Value = Options newList}
+    solveCellRange cell sudoku (getSudkoBoxOfCell cell sudoku)
 
-
-type pos = {x:int;y:int}
 //http://www.sudokuhints.nl/duo's
-let findDuosHorizontal (sudoku:sudokuGrid) : (pos * sudokuCell list) list =
-    sudoku |> List.groupBy (fun c -> {x=c.x/3; y=c.y/3} )
+let findDuosHorizontal (sudoku:sudokuGrid) =
+    let rec CheckForDuo cells box =
+        match cells with
+        | [] -> []
+        | head::tail -> 
+            match head.Value with
+            | Resolved _ -> CheckForDuo tail box
+            | Options ops -> 
+                let row = head.y
+                let rec canX x cells =
+                    match cells with
+                    | [] -> false
+                    | head::tail ->
+                        match head.Value with
+                        | Resolved _ -> canX x tail
+                        | Options ops -> if head.y <> row && ops |> List.exists(fun op -> x = op) then true else canX x tail
+
+                if not (ops |> List.exists(fun op -> canX op box)) then
+                    head :: CheckForDuo tail box
+                else
+                    CheckForDuo tail box
+
+    sudoku |> getSudokuBoxes |> List.map snd |> List.map (fun cells -> CheckForDuo cells cells)
+
+let findDuosVertical (sudoku:sudokuGrid) =
+    let rec CheckForDuo cells box =
+        match cells with
+        | [] -> []
+        | head::tail -> 
+            match head.Value with
+            | Resolved _ -> CheckForDuo tail box
+            | Options ops -> 
+                let col = head.x
+                let rec canX x cells =
+                    match cells with
+                    | [] -> false
+                    | head::tail ->
+                        match head.Value with
+                        | Resolved _ -> canX x tail
+                        | Options ops -> if head.x <> col && ops |> List.exists(fun op -> x = op) then true else canX x tail
+
+                if not (ops |> List.exists(fun op -> canX op box)) then
+                    head :: CheckForDuo tail box
+                else
+                    CheckForDuo tail box
+
+    sudoku |> getSudokuBoxes |> List.map snd |> List.map (fun cells -> CheckForDuo cells cells)
+    
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 let isSolved (sudoku:sudokuGrid) : bool =
     sudoku |> List.forall (fun c -> match c.Value with | Resolved _ -> true | _-> false)
 
+let solveFunctions = [solveCellHorizontal;solveCellVertical;solveCellSudokuBox;]
+
 let rec solveSudoku (sudoku:sudokuGrid) : sudokuGrid =
-    let solvedSudoku = 
-        sudoku 
-        |> List.map (fun cell -> solveCellHorizontal cell sudoku)
-        |> List.map (fun cell -> solveCellVertical cell sudoku)
-        |> List.map (fun cell -> solveCellSudokuBox cell sudoku)
+    let solvedSudoku = solveFunctions |> List.fold (fun sudoku f -> sudoku |> List.map (fun cell -> f cell sudoku)) sudoku
     if solvedSudoku = sudoku then
-        // TODO sudoku is imposible to solve with the curront algorithm
+        // TODO sudoku is imposible to solve with the current algorithm
         solvedSudoku
     elif solvedSudoku |> isSolved then
         solvedSudoku
@@ -139,6 +169,16 @@ let parseRawSudoku (rs:string) : sudokuGrid =
         |> Seq.mapi (fun i v -> {Value = v; x = i%9; y = i/9})
         |> Seq.toList
 
+let validateSudoku (sudoku:sudokuGrid) =
+    let is45 list =
+        list |> List.map (fun row -> row |> List.sumBy (fun cell -> match cell.Value with | Resolved r -> r |_->0)) |> List.forall (fun a -> a = 45)
+    //get rows
+    let rows = sudoku |> List.groupBy (fun c -> c.y) |> List.map snd |> is45
+    let cols = sudoku |> List.groupBy (fun c -> c.y) |> List.map snd |> is45
+    let boxes = sudoku |> getSudokuBoxes |> List.map snd |> is45
+    rows && cols && boxes
+
+
 let printSudoku (sudoku:sudokuGrid) =
     let printCell i cell =
         let v = match cell.Value with
@@ -153,20 +193,27 @@ let printSudoku (sudoku:sudokuGrid) =
 let readSudokuFile =
     System.IO.File.ReadAllLines("E:\drive\Hro\dev2\Sudoku\Sudoku\0.txt") |> Seq.toList |> List.map parseRawSudoku 
 
-let sudokus = readSudokuFile |> List.map solveSudoku
+#time
+let sudokus = readSudokuFile |> List.map solveSudoku 
+#time
+
+#time
+let sudokusp = readSudokuFile |> List.toArray |> Array.Parallel.map solveSudoku 
+#time
 
 sudokus |> List.countBy isSolved
 
-sudokus |> List.filter (fun s -> not (isSolved s))
+sudokus |> List.filter (fun s -> (isSolved s)) |> List.map validateSudoku |> List.forall (fun b -> b)
+
+sudokus |> List.filter (fun s -> not (isSolved s)) |> List.item 1 |> printSudoku
+sudokus |> List.filter (fun s -> not (isSolved s)) |> List.item 1 |> findDuosHorizontal
+sudokus |> List.filter (fun s -> not (isSolved s)) |> List.item 1 |> findDuosVertical
 
 rawSudoku |> parseRawSudoku |> findDuosHorizontal
 
-//let sudoku = rawSudoku |> parseRawSudoku
-//
-//printSudoku sudoku
-//
-//printfn "----"
-//
-//sudoku |> solveSudoku |> printSudoku
 
+//1) list comprehensions
+//2) list monad
+//3) async monad
+//4) webcam -> picture -> rgb -> hsv -> h -> count occurrences -> make histogram -> draw with windows forms
 
